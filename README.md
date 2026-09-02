@@ -44,7 +44,6 @@ The backend follows an **event-driven microservices architecture** using **Rabbi
 
 ## 📦 Project Structure
 
-```txt
 backend/
 ├── user/
 │   ├── .env.example
@@ -119,26 +118,3 @@ Real-time communication using Socket.IO
 Independently scalable services
 
 Production-ready deployment on AWS EC2
-
-
-👨‍💻 Author
-
-Backend microservices built as a real-world chat system, deployed on AWS EC2, demonstrating event-driven architecture and real-time communication.
-
-
----
-
-## ✅ What this gives you
-
-✔ Anyone can **open the app instantly**  
-✔ Clear AWS deployment proof  
-✔ Recruiter-friendly  
-✔ Professional & production-style docs  
-
-If you want next, I can:
-- Add **PM2 + Nginx setup**
-- Add **“How I deployed on EC2” section**
-- Add **architecture diagram**
-- Make a **YouTube description + GitHub link combo**
-
-Just tell me 🚀
