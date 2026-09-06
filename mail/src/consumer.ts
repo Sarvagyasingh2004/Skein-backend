@@ -9,7 +9,7 @@ export const startSendOtpConsumer = async () => {
     const connection = await amqp.connect({
       protocol: "amqp",
       hostname: process.env.RABBITMQ_HOST,
-      port: 5672,
+      port: Number(process.env.RABBITMQ_PORT),
       username: process.env.RABBITMQ_USERNAME,
       password: process.env.RABBITMQ_PASSWORD,
     });
@@ -19,7 +19,7 @@ export const startSendOtpConsumer = async () => {
     await channel.assertQueue(queueName, { durable: true });
 
     console.log(
-      "📨 Mail service consumer started, listening for OTP emails..."
+      "📨 Mail service consumer started, listening for OTP emails...",
     );
 
     channel.consume(queueName, async (msg) => {
@@ -40,7 +40,7 @@ export const startSendOtpConsumer = async () => {
         console.log("✅ SMTP verified with Gmail");
 
         await transporter.sendMail({
-          from: `"Chat App" <${process.env.EMAIL_USER}>`,
+          from: `"Skein" <${process.env.EMAIL_USER}>`,
           to,
           subject,
           text: body,
