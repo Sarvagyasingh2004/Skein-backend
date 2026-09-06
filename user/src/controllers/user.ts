@@ -82,7 +82,7 @@ export const myProfile = TryCatch(
   async (req: AuthenticatedRequest, res: Response) => {
     const user = req.user;
     res.json(user);
-  }
+  },
 );
 
 export const updateUsername = TryCatch(
@@ -104,19 +104,19 @@ export const updateUsername = TryCatch(
       user,
       token,
     });
-  }
+  },
 );
 
 export const getAllUsers = TryCatch(
   async (req: AuthenticatedRequest, res: Response) => {
     const users = await User.find({});
     res.json(users);
-  }
+  },
 );
 
 export const getUser = TryCatch(
   async (req: AuthenticatedRequest, res: Response) => {
     const user = await User.findById(req.params.id);
     res.json(user);
-  }
+  },
 );

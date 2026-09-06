@@ -7,7 +7,7 @@ export const connectRabbitMQ = async () => {
     const connection = await amqp.connect({
       protocol: "amqp",
       hostname: process.env.RABBITMQ_HOST,
-      port: 5672,
+      port: Number(process.env.RABBITMQ_PORT),
       username: process.env.RABBITMQ_USERNAME,
       password: process.env.RABBITMQ_PASSWORD,
     });
@@ -20,10 +20,9 @@ export const connectRabbitMQ = async () => {
 
 export const publishToQueue = async (queueName: string, message: any) => {
   if (!channel) {
-    console.log("Rabbitmq channel is not initialised");
-    return;
+    throw new Error("Rabbitmq channel is not initialized");
   }
-  await channel.assertQueue(queueName, { durable: true }); //retry even when error occours
+  await channel.assertQueue(queueName, { durable: true }); //retry even when error occurs
 
   channel.sendToQueue(queueName, Buffer.from(JSON.stringify(message)), {
     persistent: true,

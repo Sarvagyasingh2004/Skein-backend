@@ -9,8 +9,12 @@ import { connectRabbitMQ } from "./config/rabbitmq.js";
 dotenv.config();
 const app = express();
 
+const allowedOrigins = process.env.CORS_ORIGIN
+  ? process.env.CORS_ORIGIN.split(",").map((o) => o.trim())
+  : ["http://localhost:3000", "http://localhost:3003"];
+
 app.use(express.json());
-app.use(cors());
+app.use(cors({ origin: allowedOrigins, credentials: true }));
 
 //routes
 app.use("/api/v1", userRoutes);
