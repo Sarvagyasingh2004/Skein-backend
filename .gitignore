@@ -3,3 +3,7 @@ node_modules/
 dist/
 .env
 *.log
+
+# Deployed copy of deploy/ecosystem.config.cjs (see deploy/README.md).
+# Lives at the repo root on the server because PM2 resolves cwd relative to it.
+ecosystem.config.cjs
