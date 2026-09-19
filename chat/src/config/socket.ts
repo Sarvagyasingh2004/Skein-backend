@@ -1,3 +1,8 @@
+// Must load before this module reads process.env below. ESM evaluates this file as a
+// dependency of index.ts, i.e. BEFORE index.ts's own dotenv.config() call runs — so
+// without this import CORS_ORIGIN is undefined here and Socket.IO silently falls back
+// to the localhost dev origins.
+import "dotenv/config";
 import { Server, Socket } from "socket.io";
 import http from "http";
 import express from "express";
