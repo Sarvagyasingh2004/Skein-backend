@@ -6,6 +6,18 @@ dotenv.config();
 
 const queueName = "send-otp";
 
+// Failures land here instead of being discarded. Declared with no arguments so
+// it can never collide with an existing declaration: changing the arguments of
+// a live durable queue raises PRECONDITION_FAILED, which closes the channel and
+// would put the reconnect loop below into a permanent attach/fail cycle.
+//
+// Messages are published here explicitly rather than via a dead-letter exchange
+// because a DLX would require adding x-dead-letter-exchange to send-otp, which
+// already exists with no arguments, and would have to be mirrored in the user
+// service's publishToQueue. Publishing directly also lets us record why it
+// failed, which x-death headers cannot.
+const dlqName = "send-otp.dlq";
+
 let connection: amqp.ChannelModel | null = null;
 
 // Cleared as soon as the connection emits "close", so teardown can tell a
@@ -88,26 +100,119 @@ const ensureVerified = () => {
   return verified;
 };
 
+type OtpPayload = { to: string; subject: string; body: string };
+
+// A Gmail hiccup or rate-limit is usually transient, so a message gets a few
+// in-process attempts before it is treated as undeliverable. Bounded by
+// prefetch, so a burst of failures cannot pin unlimited messages in memory.
+const sendOtp = async (payload: OtpPayload) => {
+  const maxAttempts = envInt("MAIL_MAX_ATTEMPTS", 3);
+  let lastError: unknown;
+
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    try {
+      await ensureVerified();
+      await getTransporter().sendMail({
+        from: `"Skein" <${process.env.EMAIL_USER}>`,
+        to: payload.to,
+        subject: payload.subject,
+        text: payload.body,
+      });
+      return attempt;
+    } catch (error) {
+      lastError = error;
+      if (attempt < maxAttempts) {
+        const delay = backoffDelay(attempt);
+        console.error(
+          `Failed to send OTP to ${payload.to} (attempt ${attempt}/${maxAttempts}), retrying in ${delay}ms:`,
+          error,
+        );
+        await wait(delay);
+      }
+    }
+  }
+
+  throw lastError;
+};
+
+// Returns false when the broker applied back-pressure, so the caller can requeue
+// rather than silently drop the message it was trying to preserve.
+const deadLetter = (
+  channel: amqp.Channel,
+  msg: amqp.ConsumeMessage,
+  reason: string,
+  attempts: number,
+) => {
+  const envelope = {
+    failedAt: new Date().toISOString(),
+    reason,
+    attempts,
+    redelivered: msg.fields.redelivered,
+    // Kept as the raw string so an unparseable payload is preserved verbatim
+    // for inspection and replay.
+    payload: msg.content.toString(),
+  };
+
+  return channel.sendToQueue(dlqName, Buffer.from(JSON.stringify(envelope)), {
+    persistent: true,
+    contentType: "application/json",
+  });
+};
+
 const handleOtpMessage = async (channel: amqp.Channel, msg: amqp.ConsumeMessage) => {
+  let payload: OtpPayload;
+
+  // A malformed payload will never succeed, so it skips the retries entirely.
   try {
-    const { to, subject, body } = JSON.parse(msg.content.toString());
+    payload = JSON.parse(msg.content.toString());
+  } catch (error) {
+    console.error("Unparseable OTP message, dead-lettering:", error);
+    routeToDlq(channel, msg, `unparseable payload: ${String(error)}`, 0);
+    return;
+  }
 
-    await ensureVerified();
-    const transporter = getTransporter();
+  // Valid JSON of the wrong shape is equally undeliverable. Checked up front so
+  // it does not burn every retry and its backoff on a guaranteed failure.
+  if (!payload || typeof payload.to !== "string" || !payload.to) {
+    console.error("OTP message has no recipient, dead-lettering");
+    routeToDlq(channel, msg, "missing or invalid 'to' field", 0);
+    return;
+  }
 
-    await transporter.sendMail({
-      from: `"Skein" <${process.env.EMAIL_USER}>`,
-      to,
-      subject,
-      text: body,
-    });
-
-    console.log(`OTP mail sent to ${to}`);
+  try {
+    const attempts = await sendOtp(payload);
+    console.log(
+      `OTP mail sent to ${payload.to}${attempts > 1 ? ` (attempt ${attempts})` : ""}`,
+    );
     channel.ack(msg);
   } catch (error) {
-    console.error("Failed to send OTP:", error);
-    channel.nack(msg, false, false); // discard message to avoid infinite loop
+    console.error(
+      `Giving up on OTP to ${payload.to} after ${envInt("MAIL_MAX_ATTEMPTS", 3)} attempts, dead-lettering:`,
+      error,
+    );
+    routeToDlq(channel, msg, String(error), envInt("MAIL_MAX_ATTEMPTS", 3));
   }
+};
+
+// Ack only once the DLQ has taken the message. If the broker refused it, the
+// original is requeued instead, because dropping it here would lose the very
+// message the DLQ exists to retain.
+const routeToDlq = (
+  channel: amqp.Channel,
+  msg: amqp.ConsumeMessage,
+  reason: string,
+  attempts: number,
+) => {
+  try {
+    if (deadLetter(channel, msg, reason, attempts)) {
+      channel.ack(msg);
+      return;
+    }
+    console.error("DLQ back-pressured, requeueing instead of dropping");
+  } catch (error) {
+    console.error("Could not publish to DLQ, requeueing:", error);
+  }
+  channel.nack(msg, false, true);
 };
 
 const attachConsumer = async () => {
@@ -123,6 +228,13 @@ const attachConsumer = async () => {
   try {
     channel = await conn.createChannel();
     await channel.assertQueue(queueName, { durable: true });
+    await channel.assertQueue(dlqName, { durable: true });
+
+    // A handler can now hold a message for seconds while it retries, so cap how
+    // many are in flight. Without this the broker pushes the whole queue at
+    // once, which on a 1 GiB box is a real memory risk during an outage.
+    await channel.prefetch(envInt("MAIL_PREFETCH", 10));
+
     await channel.consume(queueName, (msg) => {
       if (!msg) return;
       void handleOtpMessage(channel, msg);
