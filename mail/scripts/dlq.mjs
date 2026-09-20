@@ -34,7 +34,25 @@ const connection = await amqp.connect({
   password: process.env.RABBITMQ_PASSWORD,
 });
 const channel = await connection.createChannel();
-await channel.assertQueue(DLQ, { durable: true });
+
+// Snapshot the depth up front and never process more than that.
+//
+// Without this bound, replay races the live consumer: a replayed message that
+// fails again lands straight back in the DLQ, where the still-running loop
+// picks it up and replays it once more. In testing a single bad message was
+// replayed 107 times before the loop happened to find the queue empty.
+// Messages that arrive mid-run are deliberately left for the next invocation.
+const { messageCount } = await channel.assertQueue(DLQ, { durable: true });
+const budget = Math.min(limit, messageCount);
+
+if (messageCount === 0) {
+  console.log(`${DLQ} is empty`);
+  await channel.close();
+  await connection.close();
+  process.exit(0);
+}
+
+console.log(`${DLQ} holds ${messageCount} message(s); processing ${budget}\n`);
 
 // peek must not consume, so messages are held and requeued together at the end.
 // Requeueing each one as it is read would hand it straight back and loop.
@@ -42,7 +60,7 @@ const held = [];
 let count = 0;
 
 try {
-  while (count < limit) {
+  while (count < budget) {
     const msg = await channel.get(DLQ, { noAck: false });
     if (!msg) break;
     count++;
